@@ -68,8 +68,7 @@ const CryptModes DEFAULT_CRYPT_MODES = {
 	{ "One Way Heroics Plus", 0x0, &DXArchive::DecodeArchive, &DXArchive::EncodeArchiveOneDirectoryWolf, "Ph=X3^]o2A(,1=@3#a" }
 };
 
-WolfDec::WolfDec(const std::wstring& progName, const uint32_t& mode, const bool& isSubProcess) :
-	m_progName(progName),
+WolfDec::WolfDec(const std::wstring&, const uint32_t& mode, const bool& isSubProcess) :
 	m_mode(mode),
 	m_isSubProcess(isSubProcess),
 	m_valid(true)
@@ -84,7 +83,15 @@ WolfDec::~WolfDec()
 bool WolfDec::IsValidFile(const tString& filePath) const
 {
 	const tStrings specialFiles = GetSpecialFiles();
-	return (std::find(specialFiles.begin(), specialFiles.end(), FS_PATH_TO_TSTRING(fs::path(filePath).filename())) == specialFiles.end());
+	if (std::find(specialFiles.begin(), specialFiles.end(), FS_PATH_TO_TSTRING(fs::path(filePath).filename())) != specialFiles.end())
+		return false;
+
+	std::ifstream file(filePath, std::ios::binary);
+	unsigned char signature[3] = {};
+	file.read(reinterpret_cast<char*>(signature), sizeof(signature));
+
+	// Some games use .wolf for UTF-8 CSV files that are not DX archives.
+	return !(file.gcount() == sizeof(signature) && signature[0] == 0xEF && signature[1] == 0xBB && signature[2] == 0xBF);
 }
 
 bool WolfDec::IsAlreadyUnpacked(const tString& filePath) const
@@ -406,9 +413,17 @@ bool WolfDec::runProcess(const tString& filePath, const uint32_t& mode, const bo
 	si.cb = sizeof(si);
 	ZeroMemory(&pi, sizeof(pi));
 
-	const std::wstring wstr = m_progName + L" -m " + std::to_wstring(mode) + L" \"" + std::wstring(filePath) + L"\"" + (override ? L" -o" : L"");
+	wchar_t modulePath[MAX_PATH];
+	const DWORD modulePathLength = GetModuleFileNameW(NULL, modulePath, MAX_PATH);
+	if (modulePathLength == 0 || modulePathLength == MAX_PATH)
+	{
+		ERROR_LOG << std::format(TEXT("GetModuleFileNameW() failed: {}"), GetLastError()) << std::endl;
+		return false;
+	}
 
-	if (!CreateProcess(NULL, const_cast<LPWSTR>(wstr.c_str()), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+	std::wstring commandLine = L"\"" + std::wstring(modulePath, modulePathLength) + L"\" -m " + std::to_wstring(mode) + L" \"" + std::wstring(filePath) + L"\"" + (override ? L" -o" : L"");
+
+	if (!CreateProcessW(modulePath, commandLine.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
 	{
 		ERROR_LOG << std::format(TEXT("CreateProcess() failed: {}"), GetLastError()) << std::endl;
 		return false;
